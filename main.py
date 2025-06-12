@@ -48,11 +48,10 @@ if not API_KEY:
 # Initialize Instagram scraper
 instagram_scraper = None
 try:
-    instagram_scraper = InstagramScraper(rate_limit=5)
+    instagram_scraper = InstagramScraper(rate_limit=3)
     logger.info("Instagram scraper initialized successfully")
 except Exception as e:
     logger.error(f"Failed to initialize Instagram scraper: {str(e)}")
-    # Don't raise the error here, we'll handle it in the endpoints
 
 async def get_api_key(api_key: str = Depends(api_key_header)):
     if not api_key or api_key != API_KEY:
@@ -60,151 +59,13 @@ async def get_api_key(api_key: str = Depends(api_key_header)):
     return api_key
 
 # Models
-class PortfolioRequest(BaseModel):
-    url: str
-
-class InstagramProfileRequest(BaseModel):
-    username: str
-
 class CandidateData(BaseModel):
     portfolio_url: Optional[str] = None
     github_username: Optional[str] = None
     instagram_username: Optional[str] = None
     resume_file: Optional[UploadFile] = None
 
-class UsernameRequest(BaseModel):
-    username: str
-
-class BatchRequest(BaseModel):
-    usernames: List[str]
-
 # Routes
-@app.get("/")
-async def read_root():
-    """Root endpoint to check if the API is running."""
-    return {"status": "ok", "message": "Social Media Scraper API is running"}
-
-@app.get("/github/{username}", dependencies=[Depends(get_api_key)])
-async def get_github_profile(username: str):
-    """Get GitHub profile data."""
-    try:
-        profile_data = await fetch_github_profile(username)
-        return {
-            "status": "success",
-            "data": profile_data,
-            "timestamp": datetime.now().isoformat()
-        }
-    except GitHubAPIError as e:
-        logger.error(f"GitHub API error: {str(e)}")
-        raise HTTPException(status_code=429 if "Rate limit" in str(e) else 500, detail=str(e))
-    except ValueError as e:
-        logger.error(f"Invalid GitHub username: {str(e)}")
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception as e:
-        logger.error(f"Error fetching GitHub profile: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.get("/instagram/{username}", dependencies=[Depends(get_api_key)])
-async def get_instagram_profile(username: str):
-    """Get Instagram profile data."""
-    global instagram_scraper
-    
-    # Try to initialize the scraper if it's not already initialized
-    if not instagram_scraper:
-        try:
-            instagram_scraper = InstagramScraper(rate_limit=5)
-            logger.info("Instagram scraper initialized successfully")
-        except Exception as e:
-            logger.error(f"Failed to initialize Instagram scraper: {str(e)}")
-            raise HTTPException(
-                status_code=500,
-                detail=f"Failed to initialize Instagram scraper: {str(e)}"
-            )
-
-    try:
-        profile_data = instagram_scraper.scrape_profile(username)
-        if "error" in profile_data:
-            status_code = 404 if "not found" in profile_data["error"].lower() else 500
-            raise HTTPException(status_code=status_code, detail=profile_data["error"])
-        
-        # Extract only the required fields
-        return {
-            "status": "success",
-            "data": {
-                "bio": profile_data.get("bio"),
-                "followers": profile_data.get("followers"),
-                "posts_count": profile_data.get("posts_count")
-            },
-            "timestamp": datetime.now().isoformat()
-        }
-    except Exception as e:
-        logger.error(f"Error fetching Instagram profile: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/resume/upload", dependencies=[Depends(get_api_key)])
-async def upload_resume(
-    file: UploadFile = File(...)
-):
-    """Upload and parse a resume."""
-    try:
-        if not file.filename.lower().endswith(('.pdf', '.docx')):
-            raise HTTPException(status_code=400, detail="Only PDF and DOCX files are supported")
-
-        # Save the uploaded file temporarily
-        temp_file_path = f"temp_{file.filename}"
-        try:
-            with open(temp_file_path, "wb") as buffer:
-                content = await file.read()
-                buffer.write(content)
-
-            # Parse the resume
-            resume_data = parse_resume(content, file.filename)
-            return {
-                "status": "success",
-                "data": resume_data,
-                "timestamp": datetime.now().isoformat()
-            }
-        finally:
-            # Clean up the temporary file
-            if os.path.exists(temp_file_path):
-                os.remove(temp_file_path)
-
-    except ResumeParserError as e:
-        logger.error(f"Resume parsing error: {str(e)}")
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception as e:
-        logger.error(f"Error processing resume: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
-@app.post("/api/portfolio-scrape", dependencies=[Depends(get_api_key)])
-async def scrape_portfolio(
-    request: PortfolioRequest
-):
-    """Scrape portfolio website data."""
-    try:
-        # Fetch the page content
-        html_content = await fetch_with_selenium(request.url)
-        if not html_content:
-            raise HTTPException(status_code=404, detail="Could not fetch portfolio content")
-
-        # Parse the portfolio data
-        portfolio_data = parse_portfolio(html_content, request.url)
-        
-        # Save the data to a file
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"portfolio_data_{timestamp}.json"
-        with open(filename, "w", encoding="utf-8") as f:
-            json.dump(portfolio_data, f, indent=2, ensure_ascii=False)
-        
-        return {
-            "status": "success",
-            "data": portfolio_data,
-            "timestamp": datetime.now().isoformat()
-        }
-    except Exception as e:
-        logger.error(f"Error scraping portfolio: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
-
 @app.post("/collect-candidate-data", dependencies=[Depends(get_api_key)])
 async def collect_candidate_data(
     portfolio_url: Optional[str] = Form(None),
@@ -216,6 +77,7 @@ async def collect_candidate_data(
     try:
         candidate_data = {}
         errors = {}
+        warnings = {}
 
         # Process portfolio data
         if portfolio_url:
@@ -242,7 +104,7 @@ async def collect_candidate_data(
             global instagram_scraper
             if not instagram_scraper:
                 try:
-                    instagram_scraper = InstagramScraper(rate_limit=5)
+                    instagram_scraper = InstagramScraper(rate_limit=3)
                     logger.info("Instagram scraper initialized successfully")
                 except Exception as e:
                     errors["instagram"] = f"Failed to initialize Instagram scraper: {str(e)}"
@@ -253,9 +115,10 @@ async def collect_candidate_data(
                         errors["instagram"] = profile_data["error"]
                     else:
                         candidate_data["instagram"] = {
-                            "bio": profile_data.get("bio"),
-                            "followers": profile_data.get("followers"),
-                            "posts_count": profile_data.get("posts_count")
+                            "bio": profile_data.get("bio") or "No bio available",
+                            "followers": profile_data.get("followers") or 0,
+                            "posts_count": profile_data.get("posts_count") or 0,
+                            "username": instagram_username
                         }
                 except Exception as e:
                     errors["instagram"] = str(e)
@@ -263,46 +126,52 @@ async def collect_candidate_data(
         # Process resume data
         if resume_file:
             try:
-                if not resume_file.filename.lower().endswith(('.pdf', '.docx')):
+                if not resume_file.filename:
+                    errors["resume"] = "No file provided"
+                elif not resume_file.filename.lower().endswith(('.pdf', '.docx')):
                     errors["resume"] = "Only PDF and DOCX files are supported"
                 else:
-                    # Save the uploaded file temporarily
-                    temp_file_path = f"temp_{resume_file.filename}"
+                    content = await resume_file.read()
+                    
                     try:
-                        with open(temp_file_path, "wb") as buffer:
-                            content = await resume_file.read()
-                            buffer.write(content)
-
-                        # Parse the resume
-                        candidate_data["resume"] = parse_resume(content, resume_file.filename)
-                    finally:
-                        # Clean up the temporary file
-                        if os.path.exists(temp_file_path):
-                            os.remove(temp_file_path)
-            except ResumeParserError as e:
-                errors["resume"] = str(e)
+                        resume_data = parse_resume(content, resume_file.filename)
+                        
+                        if not any([
+                            resume_data.get("email"),
+                            resume_data.get("phone"),
+                            resume_data.get("skills"),
+                            resume_data.get("education"),
+                            resume_data.get("experience")
+                        ]):
+                            warnings["resume"] = "Limited data extracted from resume"
+                        
+                        candidate_data["resume"] = resume_data
+                        
+                    except ResumeParserError as e:
+                        errors["resume"] = str(e)
+                        
             except Exception as e:
                 errors["resume"] = str(e)
 
-        # Save the combined data
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"candidate_data_{timestamp}.json"
-        with open(filename, "w", encoding="utf-8") as f:
-            json.dump({
-                "candidate_data": candidate_data,
-                "errors": errors,
-                "timestamp": datetime.now().isoformat()
-            }, f, indent=2, ensure_ascii=False)
+        # Determine overall status
+        status = "success"
+        if errors:
+            status = "error"
+        elif warnings:
+            status = "warning"
 
+        # Return the collected data and any errors/warnings
         return {
-            "status": "success",
+            "status": status,
             "data": candidate_data,
-            "errors": errors,
+            "errors": errors if errors else None,
+            "warnings": warnings if warnings else None,
             "timestamp": datetime.now().isoformat()
         }
+
     except Exception as e:
         logger.error(f"Error collecting candidate data: {str(e)}")
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn
