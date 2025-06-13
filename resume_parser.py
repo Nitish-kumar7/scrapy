@@ -125,16 +125,36 @@ def extract_github_url(text: str) -> Optional[str]:
     return match.group(0) if match else None
 
 def extract_portfolio_url(text: str) -> Optional[str]:
-    """Extract Portfolio URL from text. This is a generic URL extraction for portfolio sites."""
-    # This pattern tries to find a URL that might be a portfolio. It's more general.
-    # We might need to refine this based on common portfolio hosting platforms or keywords.
-    portfolio_pattern = r'(?i)(?:https?://)?(?:www\.)?[a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)*(?:\.[a-zA-Z]{2,})+(?:/[^\s]*)?'
-    # Prioritize URLs that might contain "portfolio" or common portfolio host names
-    # This is a basic example and might need fine-tuning.
-    potential_urls = re.findall(portfolio_pattern, text)
-    for url in potential_urls:
-        if "portfolio" in url.lower() or "vercel.app" in url.lower() or "netlify.app" in url.lower():
+    """Extract Portfolio URL from text."""
+    # First try to find URLs after "Portfolio:" or similar keywords
+    portfolio_keywords = ['portfolio:', 'portfolio website:', 'portfolio url:', 'portfolio link:']
+    for keyword in portfolio_keywords:
+        if keyword.lower() in text.lower():
+            # Get the text after the keyword
+            after_keyword = text.lower().split(keyword.lower())[1].strip()
+            # Find the first URL in the text after the keyword
+            url_pattern = r'(?:https?://|www\.)[a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)*(?:\.[a-zA-Z]{2,})+(?:/[^\s]*)?'
+            match = re.search(url_pattern, after_keyword)
+            if match:
+                url = match.group(0)
+                if not url.startswith('http'):
+                    url = 'https://' + url
+                return url
+
+    # If no URL found after keywords, try to find any URL that might be a portfolio
+    url_pattern = r'(?:https?://|www\.)[a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)*(?:\.[a-zA-Z]{2,})+(?:/[^\s]*)?'
+    matches = re.finditer(url_pattern, text)
+    for match in matches:
+        url = match.group(0)
+        # Skip if it's a GitHub or Instagram URL
+        if 'github.com' in url.lower() or 'instagram.com' in url.lower():
+            continue
+        # Check if it might be a portfolio URL
+        if any(domain in url.lower() for domain in ['vercel.app', 'netlify.app', 'github.io', 'portfolio', 'personal']):
+            if not url.startswith('http'):
+                url = 'https://' + url
             return url
+
     return None
 
 def extract_instagram_username(text: str) -> Optional[str]:

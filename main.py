@@ -15,6 +15,7 @@ from github_extractor import fetch_github_profile, GitHubAPIError
 from portfolio_scraper import fetch_with_selenium, parse_portfolio
 from resume_parser import parse_resume, ResumeParserError
 from instagram_scraper import InstagramScraper
+import re
 
 # Load environment variables
 load_dotenv()
@@ -75,8 +76,13 @@ async def collect_candidate_data(
         candidate_data = {}
         errors = {}
         warnings = {}
+        
+        # Initialize variables
+        portfolio_url = None
+        github_username = None
+        instagram_username = None
 
-        # --- New Logic: Process resume first to extract URLs and usernames ---
+        # --- Process resume first to extract URLs and usernames ---
         parsed_resume_data = None
         if resume_file:
             try:
@@ -89,18 +95,19 @@ async def collect_candidate_data(
                     parsed_resume_data = parse_resume(content, resume_file.filename)
                     candidate_data["resume"] = parsed_resume_data
 
-                    # Override direct inputs with values from resume if found
-                    if parsed_resume_data.get("portfolio_url"):
-                        portfolio_url = parsed_resume_data["portfolio_url"]
-                    if parsed_resume_data.get("github_url"):
-                        github_username = parsed_resume_data["github_url"].split('/')[-1] # Extract username from URL
-                    if parsed_resume_data.get("instagram_username"):
-                        instagram_username = parsed_resume_data["instagram_username"]
+                    # Extract URLs and usernames from resume
+                    if parsed_resume_data:
+                        if parsed_resume_data.get("portfolio_url"):
+                            portfolio_url = parsed_resume_data["portfolio_url"]
+                        if parsed_resume_data.get("github_url"):
+                            github_username = parsed_resume_data["github_url"].split('/')[-1]  # Extract username from URL
+                        if parsed_resume_data.get("instagram_username"):
+                            instagram_username = parsed_resume_data["instagram_username"]
 
             except Exception as e:
                 errors["resume"] = str(e)
 
-        # Process portfolio data
+        # Process portfolio data if URL was found
         if portfolio_url:
             try:
                 html_content = await fetch_with_selenium(portfolio_url)
@@ -111,7 +118,7 @@ async def collect_candidate_data(
             except Exception as e:
                 errors["portfolio"] = str(e)
 
-        # Process GitHub data
+        # Process GitHub data if username was found
         if github_username:
             try:
                 candidate_data["github"] = await fetch_github_profile(github_username)
@@ -120,7 +127,7 @@ async def collect_candidate_data(
             except Exception as e:
                 errors["github"] = str(e)
 
-        # Process Instagram data
+        # Process Instagram data if username was found
         if instagram_username:
             global instagram_scraper
             if not instagram_scraper:
@@ -144,25 +151,48 @@ async def collect_candidate_data(
                 except Exception as e:
                     errors["instagram"] = str(e)
 
-        # Determine overall status
-        status = "success"
+        # Add any errors or warnings to the response
         if errors:
-            status = "error"
-        elif warnings:
-            status = "warning"
+            candidate_data["errors"] = errors
+        if warnings:
+            candidate_data["warnings"] = warnings
 
-        # Return the collected data and any errors/warnings
-        return {
-            "status": status,
-            "data": candidate_data,
-            "errors": errors if errors else None,
-            "warnings": warnings if warnings else None,
-            "timestamp": datetime.now().isoformat()
-        }
+        return candidate_data
 
     except Exception as e:
-        logger.error(f"Error collecting candidate data: {str(e)}")
+        logger.error(f"Error in collect_candidate_data: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Internal server error: {str(e)}")
+
+@app.get("/scrape-portfolio-direct", dependencies=[Depends(get_api_key)])
+async def scrape_portfolio_direct(url: str):
+    """Scrape portfolio data from a given URL directly."""
+    if not re.match(r'^https?://[^\s/$.?#].[^\s]*$', url):
+        raise HTTPException(status_code=400, detail="Invalid URL format")
+
+    try:
+        logger.info(f"Starting direct portfolio scrape for URL: {url}")
+        html_content = await fetch_with_selenium(url)
+        portfolio_data = parse_portfolio(html_content, url)
+
+        if not any([
+            portfolio_data["name"],
+            portfolio_data["about"],
+            portfolio_data["skills"],
+            portfolio_data["experience"],
+            portfolio_data["projects"],
+            portfolio_data["education"],
+            portfolio_data["contact"]
+        ]):
+            raise HTTPException(status_code=500, detail="Failed to extract meaningful portfolio data")
+
+        logger.info("Direct portfolio scraping completed successfully!")
+        return portfolio_data
+
+    except HTTPException as e:
+        raise e
+    except Exception as e:
+        logger.error(f"Error during direct portfolio scraping: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to scrape portfolio: {str(e)}")
 
 if __name__ == "__main__":
     import uvicorn

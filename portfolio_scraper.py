@@ -175,6 +175,18 @@ def extract_text_from_tags(soup, selectors: List[str], max_length: int = 500, fa
 
     return " ".join(list(dict.fromkeys(extracted_texts)))[:max_length] if extracted_texts else None
 
+def extract_single_text(soup, selectors: List[str], max_length: int = 500) -> Optional[str]:
+    """Extract a single clean text string from HTML tags using CSS selectors.
+    Returns the text from the first matching selector/tag found.
+    """
+    for selector in selectors:
+        tag = soup.select_one(selector)
+        if tag:
+            text = clean_text(tag.get_text())
+            if text and len(text) <= max_length:
+                return text
+    return None
+
 def extract_list_from_tags(soup, selectors: List[str], separator: str = ',') -> List[str]:
     """Extract unique, clean text items from a list or section."""
     items = []
@@ -183,7 +195,12 @@ def extract_list_from_tags(soup, selectors: List[str], separator: str = ',') -> 
     for selector in selectors:
         elements = soup.select(selector)
         for elem in elements:
-            text = clean_text(elem.get_text() or elem.get('alt') or elem.get('title'))
+            text = None
+            if elem.name == 'img': # Check if it's an image tag
+                text = clean_text(elem.get('alt')) # Get alt text
+            else:
+                text = clean_text(elem.get_text() or elem.get('alt') or elem.get('title'))
+
             if not text or any(ex_kw.lower() in text.lower() for ex_kw in exclude_keywords):
                 continue
             if separator in text:
@@ -222,96 +239,113 @@ def parse_portfolio(html_content: str, url: str) -> Dict:
     # Extract name
     name_selectors = ['h1.text-5xl', 'h2.text-4xl', '.name', '.profile-name', '.hero h1']
     portfolio_data["name"] = extract_text_from_tags(
-        soup, name_selectors, max_length=100, keywords=['developer', 'engineer', 'yuva'], exclude_keywords=['projects', 'skills', 'experience', 'responsibilities']
+        soup, name_selectors, max_length=100, keywords=None, exclude_keywords=None
     ) or clean_text(soup.find('title').get_text().split('|')[0] if soup.find('title') else None)
     logger.info(f"Extracted name: {portfolio_data['name']}")
 
-    # Extract about section
-    about_selectors = ['#about p', '#hero p.text-lg', '.about p', '.bio p', '.intro p', '.max-w-prose']
+    # Generalize About section extraction
+    about_selectors = ['#about p', '.about p', '.bio p', '.intro p', 'section#about p', 'div.about-me p', 'p.text-white-50.md\:text-xl']
     portfolio_data["about"] = extract_text_from_tags(
-        soup, about_selectors, max_length=500, keywords=['about', 'developer', 'passionate', 'ai'], exclude_keywords=['contact', 'resume', 'projects', 'skills']
+        soup, about_selectors, max_length=1000, exclude_keywords=['contact', 'resume', 'projects', 'skills']
     )
+    # Fallback to general paragraph search if specific selectors fail
+    if not portfolio_data["about"]:
+        about_paragraph = soup.find(lambda tag: tag.name == "p" and len(tag.get_text()) > 100 and not any(k.lower() in tag.get_text().lower() for k in ["experience", "skills", "education", "contact", "project"]))
+        if about_paragraph:
+            portfolio_data["about"] = clean_text(about_paragraph.get_text())
     logger.info(f"Extracted about: {portfolio_data['about'][:100] if portfolio_data['about'] else None}")
 
     # Extract skills
-    skills_selectors = ['#skills .skill-item', '#skills span.inline-block', '.skills li', '.technologies span.text-sm', '.flex-wrap span.rounded']
-    skills_section = soup.select_one('#skills, .skills, .technologies')
+    skills_selectors = ['#skills li', '#skills span', '.skills li', '.skill-item', 'div.skills h3', 'li']
+    skills_section = soup.select_one('#skills, .skills, .tech-stack')
     if skills_section:
-        portfolio_data["skills"] = extract_list_from_tags(soup, skills_selectors)
+        portfolio_data["skills"] = extract_list_from_tags(skills_section, skills_selectors)
     logger.info(f"Extracted {len(portfolio_data['skills'])} skills: {portfolio_data['skills'][:10]}")
 
-    # Extract experience
+    # Generalize Experience section extraction
     experience_selectors = ['#experience', '.experience', '.timeline', '[class*="experience"]']
     experience_section = soup.select_one(','.join(experience_selectors))
     if experience_section:
-        entries = experience_section.select('.timeline-entry, .experience-item, .job, div.mb-8')
+        entries = experience_section.select('.timeline-entry, .experience-item, .job, div[class*="experience-entry"], div.mb-8')
         for entry in entries:
-            title = extract_text_from_tags(entry, ['h3.text-xl', 'h4.text-lg', '.job-title'], max_length=100, exclude_keywords=['responsibilities', 'date'])
-            date_text = extract_text_from_tags(entry, ['.date-range', '.duration', '.text-sm'], max_length=50)
-            # Clean date to extract only the range (e.g., "April 2024 - April 2025")
-            date_match = re.search(r'\b(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w* \d{4} - (?:Present|\w+ \d{4})\b', date_text or '')
-            date = date_match.group(0) if date_match else date_text
+            title = extract_single_text(entry, ['h3', 'h4', '.job-title', 'div.title'], max_length=100)
+            company = extract_single_text(entry, ['h4', '.company-name', 'div.company'], max_length=100)
+            date_text = extract_single_text(entry, ['.date-range', '.duration', '.text-sm', 'span'], max_length=50)
+            responsibilities = [clean_text(li.get_text()) for li in entry.select('ul li, .description p') if clean_text(li.get_text())]
+
             experience = {
                 "title": title,
-                "date": date,
-                "responsibilities": [
-                    clean_text(r.get_text()) for r in entry.select('ul li, .description p') if clean_text(r.get_text())
-                ]
+                "company": company,
+                "date": date_text,
+                "responsibilities": responsibilities
             }
             if any(experience.values()):
                 portfolio_data["experience"].append(experience)
     logger.info(f"Extracted {len(portfolio_data['experience'])} experience entries")
 
-    # Extract projects
-    project_selectors = ['#projects', '.projects', '.portfolio', '[class*="projects"]', '.grid']
+    # Generalize Projects section extraction
+    project_selectors = ['#projects', '.projects', '.portfolio', 'section#projects', 'div.projects']
     project_section = soup.select_one(','.join(project_selectors))
     if project_section:
-        project_entries = project_section.select('.project-item, .portfolio-item, div.rounded-lg')
+        project_entries = project_section.select('.project-item, .portfolio-item, div.project-card, div.rounded-lg, div.relative.w-full.h-full')
         for entry in project_entries:
+            title = extract_single_text(entry, ['h3', 'h2', '.project-name', '.title'], max_length=100)
+            description = extract_single_text(entry, ['p', '.description', '.summary'], max_length=500)
+            link = extract_link_from_tags(entry, ['a[href*="github.com"]', 'a.live-demo', 'a.view-details'], url)
+
             project = {
-                "title": extract_text_from_tags(entry, ['h3.text-lg', 'h4', '.project-name'], max_length=100),
-                "description": extract_text_from_tags(entry, ['p.description', '.summary'], max_length=500),
-                "link": extract_link_from_tags(entry, ['a.project-link', 'a[href*="github.com"]'], url)
+                "title": title,
+                "description": description,
+                "link": link
             }
             if any(project.values()):
                 portfolio_data["projects"].append(project)
     logger.info(f"Extracted {len(portfolio_data['projects'])} projects")
 
-    # Extract education
-    education_selectors = ['#education', '.education', '[class*="education"]']
+    # Generalize Education section extraction
+    education_selectors = ['#education', '.education', 'section#education', 'div.education-section']
     education_section = soup.select_one(','.join(education_selectors))
     if education_section:
-        education_entries = education_section.select('.education-item, div.mb-6')
+        education_entries = education_section.select('.education-item, div[class*="education-entry"], div.mb-6')
         for entry in education_entries:
+            years = extract_single_text(entry, ['.years', '.duration', 'span', 'h3'], max_length=50)
+            institution = extract_single_text(entry, ['h3', 'h4', '.institution'], max_length=100)
+            degree = extract_single_text(entry, ['p', '.degree', '.qualification', 'h5'], max_length=100)
+
             education = {
-                "years": extract_text_from_tags(entry, ['.years', '.duration', '.text-sm'], max_length=50),
-                "institution": extract_text_from_tags(entry, ['h3.text-lg', '.institution'], max_length=100),
-                "degree": extract_text_from_tags(entry, ['p.degree', '.qualification'], max_length=100)
+                "years": years,
+                "institution": institution,
+                "degree": degree
             }
             if any(education.values()):
                 portfolio_data["education"].append(education)
     logger.info(f"Extracted {len(portfolio_data['education'])} education entries")
 
-    # Extract contact information
+    # Generalize Contact information extraction
     contact_selectors = {
         "linkedin": "a[href*='linkedin.com']",
         "twitter": "a[href*='twitter.com'], a[href*='x.com']",
         "instagram": "a[href*='instagram.com']",
         "github": "a[href*='github.com']",
-        "email": "a[href*='mailto:']",
-        "website": "a[href*='http']:not([href*='linkedin.com'],[href*='twitter.com'],[href*='x.com'],[href*='instagram.com'],[href*='github.com'])"
+        "email": "a[href*='mailto:'], p:contains('@')",
+        "phone": "a[href*='tel:'], p:contains('+')"
     }
-    contact_section = soup.select_one('#contact, .contact, .connect, footer, [class*="contact"], .social-links')
-    if contact_section:
-        for platform, selector in contact_selectors.items():
-            link_elem = contact_section.select_one(selector)
-            if link_elem and link_elem.get("href"):
-                portfolio_data["contact"][platform] = link_elem["href"].replace('mailto:', '')
-    else:
-        for platform, selector in contact_selectors.items():
-            link_elem = soup.select_one(selector)
-            if link_elem and link_elem.get("href"):
-                portfolio_data["contact"][platform] = link_elem["href"].replace('mailto:', '')
+    
+    for platform, selector in contact_selectors.items():
+        link_or_text_elem = soup.select_one(selector)
+        if link_or_text_elem:
+            if platform == "email" and link_or_text_elem.name == 'p':
+                portfolio_data["contact"]["email"] = clean_text(link_or_text_elem.get_text())
+            elif platform == "phone" and link_or_text_elem.name == 'p':
+                portfolio_data["contact"]["phone"] = clean_text(link_or_text_elem.get_text())
+            elif link_or_text_elem.get("href"):
+                portfolio_data["contact"][platform] = link_or_text_elem["href"].replace('mailto:', '').replace('tel:', '')
+            else:
+                # For social media, if it's just text, try to extract from text
+                text_content = clean_text(link_or_text_elem.get_text())
+                if text_content and platform in text_content.lower():
+                    portfolio_data["contact"][platform] = text_content
+
     logger.info(f"Extracted {len(portfolio_data['contact'])} contact links")
 
     # Save to JSON
