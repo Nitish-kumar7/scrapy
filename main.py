@@ -68,10 +68,7 @@ class CandidateData(BaseModel):
 # Routes
 @app.post("/collect-candidate-data", dependencies=[Depends(get_api_key)])
 async def collect_candidate_data(
-    portfolio_url: Optional[str] = Form(None),
-    github_username: Optional[str] = Form(None),
-    instagram_username: Optional[str] = Form(None),
-    resume_file: Optional[UploadFile] = File(None)
+    resume_file: UploadFile = File(...)
 ):
     """Collect and analyze candidate data from multiple sources."""
     try:
