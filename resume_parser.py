@@ -118,6 +118,36 @@ def extract_phone(text: str) -> Optional[str]:
                 return phone
     return None
 
+def extract_github_url(text: str) -> Optional[str]:
+    """Extract GitHub profile URL from text."""
+    github_pattern = r'(?i)(?:https?://)?(?:www\.)?github\.com/[A-Za-z0-9_-]+'
+    match = re.search(github_pattern, text)
+    return match.group(0) if match else None
+
+def extract_portfolio_url(text: str) -> Optional[str]:
+    """Extract Portfolio URL from text. This is a generic URL extraction for portfolio sites."""
+    # This pattern tries to find a URL that might be a portfolio. It's more general.
+    # We might need to refine this based on common portfolio hosting platforms or keywords.
+    portfolio_pattern = r'(?i)(?:https?://)?(?:www\.)?[a-zA-Z0-9-]+(?:\.[a-zA-Z0-9-]+)*(?:\.[a-zA-Z]{2,})+(?:/[^\s]*)?'
+    # Prioritize URLs that might contain "portfolio" or common portfolio host names
+    # This is a basic example and might need fine-tuning.
+    potential_urls = re.findall(portfolio_pattern, text)
+    for url in potential_urls:
+        if "portfolio" in url.lower() or "vercel.app" in url.lower() or "netlify.app" in url.lower():
+            return url
+    return None
+
+def extract_instagram_username(text: str) -> Optional[str]:
+    """Extract Instagram username from text."""
+    instagram_pattern = r'(?i)(?:@|instagram\.com/)([A-Za-z0-9_.]+)'
+    match = re.search(instagram_pattern, text)
+    if match:
+        # If it's a URL, extract just the username part
+        if "instagram.com/" in match.group(0):
+            return match.group(1)
+        return match.group(0).lstrip('@') # Remove the leading '@' if present
+    return None
+
 def extract_skills(text: str) -> List[str]:
     """Extract skills from text with improved pattern matching."""
     found_skills = set()
@@ -375,15 +405,17 @@ def parse_resume(content: bytes, filename: str) -> Dict[str, Any]:
 
         # Extract all information
         resume_data = {
-            "contact": {
-                "email": extract_email(text),
-                "phone": extract_phone(text)
-            },
+            "text": text,
+            "email": extract_email(text),
+            "phone": extract_phone(text),
             "skills": extract_skills(text),
             "education": extract_education(text),
             "experience": extract_experience(text),
             "certifications": extract_certifications(text),
             "projects": extract_projects(text),
+            "github_url": extract_github_url(text),
+            "portfolio_url": extract_portfolio_url(text),
+            "instagram_username": extract_instagram_username(text),
             "metadata": {
                 "raw_text_length": len(text),
                 "timestamp": datetime.now().isoformat()
@@ -392,8 +424,8 @@ def parse_resume(content: bytes, filename: str) -> Dict[str, Any]:
 
         # Validate extracted data
         if not any([
-            resume_data["contact"]["email"],
-            resume_data["contact"]["phone"],
+            resume_data["email"],
+            resume_data["phone"],
             resume_data["skills"],
             resume_data["education"],
             resume_data["experience"]
@@ -401,8 +433,21 @@ def parse_resume(content: bytes, filename: str) -> Dict[str, Any]:
             logger.warning("No meaningful data extracted from resume")
             raise ResumeParserError("Could not extract meaningful information from the resume")
 
+        # Further analysis or cleanup if needed
+        # For example, ensure no empty lists/strings are returned if not found
+        for key, value in resume_data.items():
+            if isinstance(value, list) and not value:
+                resume_data[key] = None
+            elif isinstance(value, str) and not value.strip():
+                resume_data[key] = None
+
+        logger.info(f"Successfully parsed resume {filename}")
         return resume_data
 
     except Exception as e:
         logger.error(f"Resume parsing error: {str(e)}")
         raise ResumeParserError(f"Error parsing resume: {str(e)}")
+
+if __name__ == "__main__":
+    # Example Usage
+    pass

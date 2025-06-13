@@ -79,6 +79,30 @@ async def collect_candidate_data(
         errors = {}
         warnings = {}
 
+        # --- New Logic: Process resume first to extract URLs and usernames ---
+        parsed_resume_data = None
+        if resume_file:
+            try:
+                if not resume_file.filename:
+                    errors["resume"] = "No resume file provided"
+                elif not resume_file.filename.lower().endswith(('.pdf', '.docx')):
+                    errors["resume"] = "Only PDF and DOCX resume files are supported"
+                else:
+                    content = await resume_file.read()
+                    parsed_resume_data = parse_resume(content, resume_file.filename)
+                    candidate_data["resume"] = parsed_resume_data
+
+                    # Override direct inputs with values from resume if found
+                    if parsed_resume_data.get("portfolio_url"):
+                        portfolio_url = parsed_resume_data["portfolio_url"]
+                    if parsed_resume_data.get("github_url"):
+                        github_username = parsed_resume_data["github_url"].split('/')[-1] # Extract username from URL
+                    if parsed_resume_data.get("instagram_username"):
+                        instagram_username = parsed_resume_data["instagram_username"]
+
+            except Exception as e:
+                errors["resume"] = str(e)
+
         # Process portfolio data
         if portfolio_url:
             try:
@@ -122,36 +146,6 @@ async def collect_candidate_data(
                         }
                 except Exception as e:
                     errors["instagram"] = str(e)
-
-        # Process resume data
-        if resume_file:
-            try:
-                if not resume_file.filename:
-                    errors["resume"] = "No file provided"
-                elif not resume_file.filename.lower().endswith(('.pdf', '.docx')):
-                    errors["resume"] = "Only PDF and DOCX files are supported"
-                else:
-                    content = await resume_file.read()
-                    
-                    try:
-                        resume_data = parse_resume(content, resume_file.filename)
-                        
-                        if not any([
-                            resume_data.get("email"),
-                            resume_data.get("phone"),
-                            resume_data.get("skills"),
-                            resume_data.get("education"),
-                            resume_data.get("experience")
-                        ]):
-                            warnings["resume"] = "Limited data extracted from resume"
-                        
-                        candidate_data["resume"] = resume_data
-                        
-                    except ResumeParserError as e:
-                        errors["resume"] = str(e)
-                        
-            except Exception as e:
-                errors["resume"] = str(e)
 
         # Determine overall status
         status = "success"
